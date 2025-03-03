@@ -453,7 +453,11 @@ impl Git2 {
             } else {
                 let mut status_options = StatusOptions::new();
 
-                _ = status_options.include_untracked(self.dirty_include_untracked);
+                _ = status_options
+                    // Updating the index acquires the index lock. Rustc can get killed, which can
+                    // lead to a stale lockfile.
+                    .update_index(false)
+                    .include_untracked(self.dirty_include_untracked);
                 let statuses = repo.statuses(Some(&mut status_options))?;
 
                 let n_dirty = statuses

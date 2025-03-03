@@ -27,6 +27,8 @@ mod test_git_git2 {
         static ref GIT_CT_IDEM_RE_STR: &'static str =
             r"cargo:rustc-env=VERGEN_GIT_COMMIT_TIMESTAMP=VERGEN_IDEMPOTENT_OUTPUT";
         static ref GIT_DESCRIBE_RE_STR: &'static str = r"cargo:rustc-env=VERGEN_GIT_DESCRIBE=.*";
+        static ref GIT_DESCRIBE_DIRTY_RE_STR: &'static str =
+            r"cargo:rustc-env=VERGEN_GIT_DESCRIBE=.*-dirty";
         static ref GIT_SHA_RE_STR: &'static str = r"cargo:rustc-env=VERGEN_GIT_SHA=[0-9a-f]{40}";
         static ref GIT_SHORT_SHA_RE_STR: &'static str =
             r"cargo:rustc-env=VERGEN_GIT_SHA=[0-9a-f]{7}";
@@ -131,6 +133,7 @@ cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH";
             .join("\n");
             Regex::new(&re_str).unwrap()
         };
+        static ref GIT_DESCRIBE_DIRTY: Regex = Regex::new(&GIT_DESCRIBE_DIRTY_RE_STR).unwrap();
     }
 
     fn repo_exists() -> Result<bool> {
@@ -277,6 +280,24 @@ cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH";
             .build()?;
         let _ = git2.at_path(repo.path());
         assert!(Emitter::default().add_instructions(&git2)?.emit().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn git_describe_dirty_suffix() -> Result<()> {
+        let repo = TestRepos::new(true, true, false)?;
+        let mut git2 = Git2Builder::default()
+            .all()
+            .describe(true, true, None)
+            .build()?;
+        let _ = git2.at_path(repo.path());
+        let mut stdout_buf = vec![];
+        Emitter::default()
+            .add_instructions(&git2)?
+            .emit_to(&mut stdout_buf)?;
+        let output = String::from_utf8_lossy(&stdout_buf);
+        assert!(GIT_DESCRIBE_DIRTY.is_match(&output));
         Ok(())
     }
 

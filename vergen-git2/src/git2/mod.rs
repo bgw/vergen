@@ -447,27 +447,34 @@ impl Git2 {
             }
         }
 
+        // Compute the dirty state once and share it across `VergenKey::GitDirty` and
+        // `VergenKey::GitDescribe`.
+        let dirty = if self.dirty || (self.describe && self.describe_dirty) {
+            let mut status_options = StatusOptions::new();
+
+            _ = status_options
+                // Updating the index acquires a lockfile. Rustc can get SIGKILLed, which can lead
+                // to a stale lockfile.
+                .update_index(false)
+                .include_untracked(self.dirty_include_untracked);
+            let statuses = repo.statuses(Some(&mut status_options))?;
+
+            Some(
+                statuses
+                    .iter()
+                    .any(|each_status| !each_status.status().is_ignored()),
+            )
+        } else {
+            None
+        };
+
         if self.dirty {
             if let Ok(_value) = env::var(GIT_DIRTY_NAME) {
                 add_default_map_entry(VergenKey::GitDirty, cargo_rustc_env, cargo_warning);
             } else {
-                let mut status_options = StatusOptions::new();
-
-                _ = status_options
-                    // Updating the index acquires the index lock. Rustc can get killed, which can
-                    // lead to a stale lockfile.
-                    .update_index(false)
-                    .include_untracked(self.dirty_include_untracked);
-                let statuses = repo.statuses(Some(&mut status_options))?;
-
-                let n_dirty = statuses
-                    .iter()
-                    .filter(|each_status| !each_status.status().is_ignored())
-                    .count();
-
                 add_map_entry(
                     VergenKey::GitDirty,
-                    format!("{}", n_dirty > 0),
+                    format!("{}", dirty.expect("dirty has been set")),
                     cargo_rustc_env,
                 );
             }
@@ -478,13 +485,9 @@ impl Git2 {
                 add_default_map_entry(VergenKey::GitDescribe, cargo_rustc_env, cargo_warning);
             } else {
                 let mut describe_opts = DescribeOptions::new();
-                let mut format_opts = DescribeFormatOptions::new();
+                let format_opts = DescribeFormatOptions::new();
 
                 _ = describe_opts.show_commit_oid_as_fallback(true);
-
-                if self.describe_dirty {
-                    _ = format_opts.dirty_suffix("-dirty");
-                }
 
                 if self.describe_tags {
                     _ = describe_opts.describe_tags();
@@ -494,9 +497,22 @@ impl Git2 {
                     _ = describe_opts.pattern(pattern);
                 }
 
-                let describe = repo
+                // libgit2 unconditionally calls `git_status_list_new` when using
+                // `git_describe_workdir`, without exposing the `update_index` option, and
+                // potentially computing the (relatively expensive) dirty information twice (see
+                // `self.dirty` above).
+                //
+                // Instead of calling `repo.describe()`, call `.describe()` on HEAD and use our own
+                // dirty flag.
+                let mut describe = commit
+                    .as_object()
                     .describe(&describe_opts)
                     .map(|x| x.format(Some(&format_opts)).map_err(Error::from))??;
+
+                if self.describe_dirty && dirty.expect("dirty has been set") {
+                    describe.push_str("-dirty")
+                }
+
                 add_map_entry(VergenKey::GitDescribe, describe, cargo_rustc_env);
             }
         }
